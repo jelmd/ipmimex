@@ -14,6 +14,8 @@ MANDIR ?= share/man/man8
 # you probably want to append something like '/64', '/x86_64', '/amd64'
 LIBDIR ?= lib
 
+#DEBUG_FLAGS = -DDEBUG_IPMI_IF
+
 OS := $(shell uname -s)
 MACH ?= 64
 
@@ -55,10 +57,10 @@ CFLAGS_libprom ?= $(shell [ -d /usr/include/libprom ] && printf -- '-I/usr/inclu
 CFLAGS ?= -m$(MACH) $(CFLAGS_$(CC)) $(CFLAGS_libprom) $(OPTIMZE) -g
 CFLAGS += -std=c11 -DVERSION=\"$(VERSION)\"
 CFLAGS += -DPROM_LOG_ENABLE -D_XOPEN_SOURCE=600
-CFLAGS += $(CFLAGS_$(OS))
+CFLAGS += $(CFLAGS_$(OS)) $(DEBUG_FLAGS)
 
-LIBS_SunOS = -lsocket -lnsl
-LIBS_Linux =
+LIBS_SunOS = -lsocket -lnsl -lm
+LIBS_Linux = -lm
 #LIBS_libprom += $(shell [ -d ../libprom/prom/build ] && printf -- '-L ../libprom/prom/build' )
 LIBS ?= $(LIBS_$(OS)) $(LIBS_libprom)
 LIBS += -lmicrohttpd -lprom
@@ -90,7 +92,7 @@ SONAME= $(SOBN).$(DYNLIB_MAJOR)
 # uncomment to get a lib
 #DYNLIB= $(SONAME).$(DYNLIB_MINOR)
 
-LIBSRCS= $(IF_DEV).c init.c
+LIBSRCS= $(IF_DEV).c init.c hexdump.c
 LIBOBJS= $(LIBSRCS:%.c=%.o)
 
 PROGSRCS = main.c $(LIBSRCS)
