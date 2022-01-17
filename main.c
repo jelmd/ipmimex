@@ -22,6 +22,7 @@
 
 #include "common.h"
 #include "init.h"
+#include "ipmi_sdr.h"
 
 typedef enum {
 	SMF_EXIT_OK	= 0,

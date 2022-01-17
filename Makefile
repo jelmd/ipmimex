@@ -8,12 +8,14 @@
 # Copyright 2021 Jens Elkner (jel+ipmimex-src@cs.ovgu.de)
 
 VERSION = "0.1.0"
+
 PREFIX ?= /usr
 BINDIR ?= sbin
 MANDIR ?= share/man/man8
 # you probably want to append something like '/64', '/x86_64', '/amd64'
 LIBDIR ?= lib
 
+ISSUES_URL = https://github.com/jelmd/ipmimex/issues
 #DEBUG_FLAGS = -DDEBUG_IPMI_IF
 
 OS := $(shell uname -s)
@@ -51,13 +53,13 @@ CFLAGS_gcc += -pedantic -Wpointer-arith -Wwrite-strings -Wstrict-prototypes -Wne
 CFLAGS_gcc += -Wno-unused-function -Wno-multistatement-macros
 
 CFLAGS_Linux =
-CFLAGS_SunOS = -I/usr/include/microhttpd -D_MHD_DEPR_MACRO
+CFLAGS_SunOS = -I/usr/include/microhttpd -D_MHD_DEPR_MACRO -D__EXTENSIONS__
 CFLAGS_libprom ?= $(shell [ -d /usr/include/libprom ] && printf -- '-I/usr/include/libprom' )
 #CFLAGS_libprom += $(shell [ -d ../libprom/prom/include ] && printf -- '-I../libprom/prom/include' )
 CFLAGS ?= -m$(MACH) $(CFLAGS_$(CC)) $(CFLAGS_libprom) $(OPTIMZE) -g
 CFLAGS += -std=c11 -DVERSION=\"$(VERSION)\"
 CFLAGS += -DPROM_LOG_ENABLE -D_XOPEN_SOURCE=600
-CFLAGS += $(CFLAGS_$(OS)) $(DEBUG_FLAGS)
+CFLAGS += $(CFLAGS_$(OS)) $(DEBUG_FLAGS) -DISSUES_URL=\"$(ISSUES_URL)\"
 
 LIBS_SunOS = -lsocket -lnsl -lm
 LIBS_Linux = -lm
@@ -81,7 +83,7 @@ RPATH_OPT := $(RPATH_OPT_$(CC))
 
 LIBCFLAGS = $(CFLAGS) $(SHARED) $(LDFLAGS) -lc
 
-PROGS= ipmimex
+PROGS= ipmimex ipmilist
 DYNLIBEXT= .so
 DYNLIB_MAJOR= 1
 DYNLIB_MINOR= 0
@@ -92,10 +94,10 @@ SONAME= $(SOBN).$(DYNLIB_MAJOR)
 # uncomment to get a lib
 #DYNLIB= $(SONAME).$(DYNLIB_MINOR)
 
-LIBSRCS= $(IF_DEV).c init.c hexdump.c
+LIBSRCS= $(IF_DEV).c init.c hexdump.c ipmi_sdr_convert.c
 LIBOBJS= $(LIBSRCS:%.c=%.o)
 
-PROGSRCS = main.c $(LIBSRCS)
+PROGSRCS = $(LIBSRCS)
 PROGOBJS = $(PROGSRCS:%.c=%.o)
 
 all:	$(PROGS)
@@ -110,9 +112,20 @@ $(DYNLIB): Makefile $(LIBOBJS)
 	$(CC) -o $@ $(SHARED) $(SONAME_OPT)$(SONAME) $(LIBOBJS) $(LIBCFLAGS)
 	ln -sf $(DYNLIB) $(SONAME)
 
-$(PROGS):	Makefile $(DYNLIB) $(PROGOBJS)
-	[ -z $(DYNLIB) ] && $(CC) -o $@ $(PROGOBJS) $(LDFLAGS) || \
+ipmimex:	Makefile $(DYNLIB) $(PROGOBJS) main.o ipmi_sdr.o
+	@echo $(PROGOBJS)
+	[ -z $(DYNLIB) ] && $(CC) -o $@ $(PROGOBJS) main.o ipmi_sdr.o $(LDFLAGS) ||\
 	$(CC) -o $@ main.o $(DYNLIB) $(LDFLAGS)
+
+ipmilist.o: CFLAGS += -DIPMILIST
+
+ipmilist.o: Makefile ipmi_sdr.c
+	$(COMPILE.c) $(OUTPUT_OPTION) ipmi_sdr.c
+
+ipmilist:	Makefile $(DYNLIB) $(PROGOBJS) ipmilist.o
+	@echo $(PROGOBJS)
+	[ -z $(DYNLIB) ] && $(CC) -o $@ $(PROGOBJS) ipmilist.o $(LDFLAGS) || \
+	$(CC) -o $@ ipmilist.o $(DYNLIB) $(LDFLAGS)
 
 .PHONY:	clean distclean install depend
 
