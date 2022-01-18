@@ -16,13 +16,13 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <regex.h>
 
 #include <prom.h>
 #include <microhttpd.h>
 
 #include "common.h"
 #include "init.h"
-#include "ipmi_sdr.h"
 
 typedef enum {
 	SMF_EXIT_OK	= 0,
@@ -38,8 +38,11 @@ typedef enum {
 } SMF_EXIT_CODE;
 
 static struct option options[] = {
+	{"ignore-disabled-flag",no_argument,		NULL, 'D'},
 	{"no-scrapetime",		no_argument,		NULL, 'L'},
+	{"drop-no-read",		no_argument,		NULL, 'N'},
 	{"no-scrapetime-all",	no_argument,		NULL, 'S'},
+	{"version",				no_argument,		NULL, 'V'},
 	{"compact",				no_argument,		NULL, 'c'},
 	{"daemon",				no_argument,		NULL, 'd'},
 	{"foreground",			no_argument,		NULL, 'f'},
@@ -49,12 +52,15 @@ static struct option options[] = {
 	{"port",				required_argument,	NULL, 'p'},
 	{"source",				required_argument,	NULL, 's'},
 	{"verbosity",			required_argument,	NULL, 'v'},
-	{"version",				no_argument,		NULL, 'V'},
+	{"exclude-metrics",		required_argument,	NULL, 'x'},
+	{"exclude-sensors",		required_argument,	NULL, 'X'},
+	{"include-metrics",		required_argument,	NULL, 'i'},
+	{"include-sensors",		required_argument,	NULL, 'I'},
 	{0, 0, 0, 0}
 };
 
 static const char *shortUsage = {
-	"[-LScdfh] [-l file] [-n list] [-s ip] [-p port] [-v DEBUG|INFO|WARN|ERROR|FATAL]"
+	"[-DLNSVcdfh] [-l file] [-s ip] [-p port] [-v DEBUG|INFO|WARN|ERROR|FATAL] [-x mregex] [-X sregex] [-i mregex] [-I sregex]"
 };
 
 static struct {
@@ -68,6 +74,12 @@ static struct {
 	bool ipv6;
 	int MHD_error;
 	char *logfile;
+	bool drop_no_read;
+	bool ignore_disabled_flag;
+	regex_t *exc_metrics;
+	regex_t *exc_sensors;
+	regex_t *inc_metrics;
+	regex_t *inc_sensors;
 } global = {
 	.promflags = PROM_PROCESS | PROM_SCRAPETIME | PROM_SCRAPETIME_ALL,
 	.versionInfo = true,
@@ -78,52 +90,14 @@ static struct {
 	.addr = NULL,
 	.ipv6 = false,
 	.MHD_error = -1,
-	.logfile = NULL
+	.logfile = NULL,
+	.drop_no_read = false,
+	.ignore_disabled_flag = false,
+	.exc_metrics = NULL,
+	.exc_sensors = NULL,
+	.inc_metrics = NULL,
+	.inc_sensors = NULL
 };
-
-static int
-disableMetrics(char *skipList) {
-	char *clist;
-	char *s, *e;
-	size_t len;
-	int res = 0;
-
-	if (skipList == NULL)
-		return 0;
-
-	len = strlen(skipList);
-	if (len == 0)
-		return 0;
-	// Linux passes the pointer to the original arg list and thus the modified
-	// skipList would show up in process list. So make a copy and leave the
-	// original as is.
-	clist = strdup(skipList);
-	e = clist + len;
-	s = e;
-	while (s > clist) {
-		s--;
-		if (*s != ',' && s != clist)
-			continue;
-		if (s != clist)
-			s++;
-		if (s != e) {
-			if (strcmp(s, "process") == 0)
-				global.promflags &= ~PROM_PROCESS;
-			else if (strcmp(s, "version") == 0)
-				global.versionInfo = false;
-			else {
-				PROM_WARN("Unknown metrics '%s'", s);
-				res++;
-			}
-		}
-		if (s != clist)
-			s--;
-		*s = '\0';
-		e = s;
-	}
-	free(clist);
-	return res;
-}
 
 // Just in case, someone switches to MHD_USE_THREAD_PER_CONNECTION
 static _Thread_local psb_t *sb = NULL;
@@ -431,6 +405,42 @@ daemonize(void) {
 	return pfd[1];
 }
 
+static regex_t *
+get_regex(int *res, char *regex, const char *target) {
+	*res = 0;
+	if (regex == NULL)
+		return NULL;
+
+	regex_t *r = malloc(sizeof(regex_t));
+	if (r == NULL) {
+		perror(target);
+		*res = 1;
+		return NULL;
+	}
+
+	*res = regcomp(r, regex, REG_EXTENDED|REG_NOSUB);
+	if (res == 0)
+		return r;
+
+	size_t sz = regerror(*res, r, (char *)NULL, (size_t)0);
+	char *s = malloc(sz);
+	if (s == NULL) {
+		perror(target);
+		free(r);
+		*res = 1;
+		return NULL;
+	}
+
+	regerror(*res, r, s, sz);
+	fprintf(stderr, "Unable to compile regex for %s%s", target, s);
+	free(s);
+	free(r);
+	// since state of preg is undefined, we prefer to not call
+	// regfree() here.
+	*res = 1;
+	return NULL;
+}
+
 int
 main(int argc, char **argv) {
 	uint n, mode = 0;	// 0 .. oneshot  1 .. foreground  2 .. daemon
@@ -440,6 +450,7 @@ main(int argc, char **argv) {
 	struct in6_addr *addr = malloc(sizeof(struct in6_addr));
 	psb_t *buf;
 	char *str = getShortOpts(options);
+	char *exm = NULL, *exs = NULL, *inm = NULL, *ins = NULL;
 
 	while (1) {
 		int c, optidx = 0;
@@ -450,16 +461,22 @@ main(int argc, char **argv) {
 		if (c == -1)
 			break;
 		switch (c) {
-			case 'V':
-				fputs("ipmimex " IPMIMEX_VERSION
-					"\n(C) 2021 " IPMIMEX_AUTHOR "\n", stdout);
-				return 0;
+			case 'D':
+				global.ignore_disabled_flag = true;
+				break;
 			case 'L':
 				global.promflags &= ~PROM_SCRAPETIME;
+				break;
+			case 'N':
+				global.drop_no_read = true;
 				break;
 			case 'S':
 				global.promflags &= ~PROM_SCRAPETIME_ALL;
 				break;
+			case 'V':
+				fputs("ipmimex " IPMIMEX_VERSION
+					"\n(C) 2021 " IPMIMEX_AUTHOR "\n", stdout);
+				return 0;
 			case 'c':
 				global.promflags |= PROM_COMPACT;
 				break;
@@ -476,9 +493,6 @@ main(int argc, char **argv) {
 				if (global.logfile != NULL)
 					free(global.logfile);
 				global.logfile = strdup(optarg);
-				break;
-			case 'n':
-				err += disableMetrics(optarg);
 				break;
 			case 'p':
 				if ((sscanf(optarg, "%u", &n) != 1) || n == 0) {
@@ -518,6 +532,26 @@ main(int argc, char **argv) {
 					prom_log_level(n);
 				}
 				break;
+			case 'x':
+				if (exm)
+					free(exm);
+				exm = strdup(optarg);
+				break;
+			case 'X':
+				if (exs)
+					free(exs);
+				exs = strdup(optarg);
+				break;
+			case 'i':
+				if (inm)
+					free(inm);
+				inm = strdup(optarg);
+				break;
+			case 'I':
+				if (ins)
+					free(ins);
+				ins = strdup(optarg);
+				break;
 			case '?':
 				fprintf(stderr, "Usage: %s %s\n", argv[0], shortUsage);
 				return(1);
@@ -525,6 +559,19 @@ main(int argc, char **argv) {
 	}
 	free(str);
 	free(addr);
+	global.exc_metrics = get_regex(&res, exm, "exclude metrics: ");
+	free(exm);
+	err += res;
+	global.exc_sensors = get_regex(&res, exs, "exclude sensors: ");
+	free(exs);
+	err += res;
+	global.inc_metrics = get_regex(&res, inm, "include metrics: ");
+	free(inm);
+	err += res;
+	global.inc_sensors = get_regex(&res, ins, "include sensors: ");
+	free(ins);
+	err += res;
+
 	if (err)
 		return SMF_EXIT_ERR_CONFIG;
 
