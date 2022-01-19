@@ -454,11 +454,13 @@ sensor_t *
 scan_sdr_repo(uint32_t *count, bool ignore_disabled, bool drop_noread,
 	uint8_t *cc)
 {
+	sdr_full_t *sdr;
+	char *sname;
+
 	uint8_t len = 0;
 	uint16_t recId = 0, scanned = 0;
-	sdr_full_t *sdr;
 	sdr_repo_info_t *repo_info = get_repo_info(cc);
-	char *sname;
+	sensor_t *slist = NULL, *slast = NULL, *snew;
 
 	*count = 0;
 	if (repo_info == NULL || *cc != 0)
@@ -468,16 +470,10 @@ scan_sdr_repo(uint32_t *count, bool ignore_disabled, bool drop_noread,
 		return NULL;
 	}
 
-   	sdr = get_sdr(&recId, &len, cc);
-	sensor_t *slist = NULL, *slast = NULL, *snew;
-	if (recId == 0 || sdr == NULL) {
-		PROM_FATAL("Unable to get the record id of the 1st SDR to inspect.","");
-		return NULL;
-	}
-	while (recId != 0 && recId != 0xFFFF) {
-		scanned++;
+	while (recId != 0xFFFF) {
 		len = 0xFF;
 		sdr = get_sdr(&recId, &len, cc);
+		scanned++;
 		if (*cc != 0)
 			return slist;
 		if (sdr == NULL || len < 6)
@@ -726,16 +722,16 @@ next:
 
 
 static struct option sdr_opts[] = {
-	{ "drop-noread",no_argument,	NULL, 'D'},
+	{ "ignore",		no_argument,	NULL, 'D'},
+	{ "drop-noread",no_argument,	NULL, 'N'},
 	{ "help",		no_argument,	NULL, 'h'},
-	{ "ignore",		no_argument,	NULL, 'i'},
 	{ "loglevel",	no_argument,	NULL, 'l'},
 	{ "verbose",	no_argument,	NULL, 'v'},
 	{ "extended",	no_argument,	NULL, 'x'},
 	{0, 0, 0, 0}
 };
-static const char *sdr_short_opts  = { "Dhil:vx" };
-static const char *sdr_short_usage = { "[-Dhivx]i [-l {DEBUG|INFO|WARN|ERROR}"};
+static const char *sdr_short_opts  = { "DNhl:vx" };
+static const char *sdr_short_usage = { "[-DNhvx]i [-l {DEBUG|INFO|WARN|ERROR}"};
 
 int
 main(int argc, char **argv) {
@@ -753,6 +749,9 @@ main(int argc, char **argv) {
 			break;
 		switch (c) {
 			case 'D':
+				ignore_disabled_flag = true;
+				break;
+			case 'N':
 				drop_noread = true;
 				break;
 			case 'v':
@@ -768,9 +767,6 @@ main(int argc, char **argv) {
 					if (cc ==  PLL_DBG)
 						sdr_verbose++;
 				}
-				break;
-			case 'i':
-				ignore_disabled_flag = true;
 				break;
 			case 'x':
 				extended = true;
