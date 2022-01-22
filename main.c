@@ -23,6 +23,9 @@
 
 #include "common.h"
 #include "init.h"
+#include "prom_ipmi.h"
+#include "ipmi_sdr.h"
+#include "ipmi_if.h"
 
 typedef enum {
 	SMF_EXIT_OK	= 0,
@@ -41,14 +44,19 @@ static struct option options[] = {
 	{"ignore-disabled-flag",no_argument,		NULL, 'D'},
 	{"no-scrapetime",		no_argument,		NULL, 'L'},
 	{"drop-no-read",		no_argument,		NULL, 'N'},
+	{"no-powerstats",		no_argument,		NULL, 'P'},
 	{"no-scrapetime-all",	no_argument,		NULL, 'S'},
+	{"no-thresholds",		no_argument,		NULL, 'T'},
+	{"no-state",			no_argument,		NULL, 'U'},
 	{"version",				no_argument,		NULL, 'V'},
+	{"bmc",					required_argument,	NULL, 'b'},
 	{"compact",				no_argument,		NULL, 'c'},
 	{"daemon",				no_argument,		NULL, 'd'},
 	{"foreground",			no_argument,		NULL, 'f'},
 	{"help",				no_argument,		NULL, 'h'},
 	{"logfile",				required_argument,	NULL, 'l'},
 	{"no-metrics",			required_argument,	NULL, 'n'},
+	{"overview",			no_argument,		NULL, 'o'},
 	{"port",				required_argument,	NULL, 'p'},
 	{"source",				required_argument,	NULL, 's'},
 	{"verbosity",			required_argument,	NULL, 'v'},
@@ -60,26 +68,24 @@ static struct option options[] = {
 };
 
 static const char *shortUsage = {
-	"[-DLNSVcdfh] [-l file] [-s ip] [-p port] [-v DEBUG|INFO|WARN|ERROR|FATAL] [-x mregex] [-X sregex] [-i mregex] [-I sregex]"
+	"[-DLNSVcdfho] [-b path] [-l file] [-s ip] [-p port] [-v DEBUG|INFO|WARN|ERROR|FATAL] [-x mregex] [-X sregex] [-i mregex] [-I sregex]"
 };
 
 static struct {
-	uint promflags;
+	uint32_t promflags;
 	bool versionInfo;
 	prom_counter_t *req_counter;
 	prom_counter_t *res_counter;
 	struct MHD_Daemon *daemon;
-	uint port;
+	uint16_t port;
 	struct in6_addr *addr;
 	bool ipv6;
 	int MHD_error;
 	char *logfile;
-	bool drop_no_read;
-	bool ignore_disabled_flag;
-	regex_t *exc_metrics;
-	regex_t *exc_sensors;
-	regex_t *inc_metrics;
-	regex_t *inc_sensors;
+	sensor_t *sensor_list;
+	bool no_powerstats;
+	bool ipmitool;
+	scan_cfg_t scfg;
 } global = {
 	.promflags = PROM_PROCESS | PROM_SCRAPETIME | PROM_SCRAPETIME_ALL,
 	.versionInfo = true,
@@ -91,13 +97,64 @@ static struct {
 	.ipv6 = false,
 	.MHD_error = -1,
 	.logfile = NULL,
-	.drop_no_read = false,
-	.ignore_disabled_flag = false,
-	.exc_metrics = NULL,
-	.exc_sensors = NULL,
-	.inc_metrics = NULL,
-	.inc_sensors = NULL
+	.sensor_list = NULL,
+	.no_powerstats = false,
+	.ipmitool = false,
+	.scfg = {
+		.bmc = NULL,
+		.drop_no_read = false,
+		.ignore_disabled_flag = false,
+		.no_state = false,
+		.no_thresholds = false,
+		.no_ipmi = false,
+		.no_dcmi = false,
+		.exc_metrics = NULL,
+		.exc_sensors = NULL,
+		.inc_metrics = NULL,
+		.inc_sensors = NULL
+	}
 };
+
+static int
+disableMetrics(char *skipList) {
+	char *clist, *s, *e;
+	int res = 0;
+	size_t len = strlen(skipList);
+
+	if (len == 0)
+		return 0;
+	clist = strdup(skipList);	// preserve original
+	e = clist + len;
+	s = e;
+	while (s > clist) {
+		s--;
+		if (*s != ',' && s != clist)
+			continue;
+		if (s != clist)
+			s++;
+		if (s != e) {
+			if (strcmp(s, "process") == 0)
+				global.promflags &= ~PROM_PROCESS;
+			else if (strcmp(s, "version") == 0)
+				global.versionInfo = false;
+			else if (strcmp(s, "dcmi") == 0)
+				global.scfg.no_dcmi = true;
+			else if (strcmp(s, "ipmi") == 0)
+				global.scfg.no_ipmi = true;
+			else {
+				PROM_WARN("Unknown metrics '%s'", s);
+				res++;
+			}
+		}
+		if (s != clist)
+			 s--;
+		*s = '\0';
+		e = s;
+	}
+	free(clist);
+
+	return res;
+}
 
 // Just in case, someone switches to MHD_USE_THREAD_PER_CONNECTION
 static _Thread_local psb_t *sb = NULL;
@@ -108,6 +165,17 @@ collect(prom_collector_t *self) {
 	PROM_DEBUG("collector: %p  sb: %p", self, sb);
 	if (global.versionInfo)
 		getVersions(sb, compact);
+	if (!global.scfg.no_ipmi) {
+		if (sdrs_changed(global.sensor_list)) {
+			PROM_INFO("SDR repo changed. Reloading ...", "");
+			stop(global.sensor_list);
+			global.sensor_list =
+				start(&(global.scfg), global.promflags & PROM_COMPACT);
+		}
+		collect_ipmi(sb, global.sensor_list);
+	}
+	if (!global.scfg.no_dcmi)
+		collect_dcmi(sb, global.promflags & PROM_COMPACT, global.no_powerstats);
 	if (sb != NULL && !compact)
 		psb_add_char(sb, '\n');
 	return NULL;
@@ -188,6 +256,18 @@ http_handler(void *cls, struct MHD_Connection *connection, const char *url,
 		labels[0] = "/metrics";
 		mode = MHD_RESPMEM_MUST_FREE;
 		status = MHD_HTTP_OK;
+	} else if (global.ipmitool && (strcmp(url, "/overview") == 0)) {
+		if (sb != NULL)
+			PROM_WARN("stringBuilder %p is already there =8-(", sb);
+		sb = psb_new();
+		show_ipmitool_sensors(global.sensor_list, sb, true);
+		body = psb_dump(sb);
+		len = psb_len(sb);
+		psb_destroy(sb);		// avoid mem leaks on thread exit
+		sb = NULL;
+		labels[0] = "/overview";
+		mode = MHD_RESPMEM_MUST_FREE;
+		status = MHD_HTTP_OK;
 	} else {
 		body = RESP[2];
 		len = rlen[2];
@@ -233,7 +313,7 @@ setupProm(void) {
 	prom_counter_t *reqc, *resc;
 	reqc = resc = NULL;
 
-	if (pcr_init(global.promflags, "nvmex_"))
+	if (pcr_init(global.promflags, "ipmimex_"))
 		return 1;
 
 	keys[0] = "url";
@@ -258,7 +338,7 @@ setupProm(void) {
 		goto fail;
 	resc = NULL;
 
-	pc = prom_collector_new("nvidia");
+	pc = prom_collector_new("ipmi");
 	if (pc == NULL)
 		goto fail;
 	prom_collector_set_collect_fn(pc, &collect);
@@ -289,7 +369,7 @@ cleanupProm(void) {
 static int
 startHttpServer(void) {
 	struct sockaddr *addr = NULL;
-	uint flags = MHD_USE_DEBUG;	// same as MHD_USE_ERROR_LOG but backward comp.
+	uint32_t flags = MHD_USE_DEBUG;	// same as MHD_USE_ERROR_LOG
 	// since there is no way to use a blocking, i.e. one (this) thread only
 	// MHD_run(), or MHD_{e?poll|select}, or MHD_polling_thread.
 	// same as MHD_USE_INTERNAL_POLLING_THREAD but backward compatible
@@ -419,7 +499,7 @@ get_regex(int *res, char *regex, const char *target) {
 	}
 
 	*res = regcomp(r, regex, REG_EXTENDED|REG_NOSUB);
-	if (res == 0)
+	if (*res == 0)
 		return r;
 
 	size_t sz = regerror(*res, r, (char *)NULL, (size_t)0);
@@ -443,7 +523,7 @@ get_regex(int *res, char *regex, const char *target) {
 
 int
 main(int argc, char **argv) {
-	uint n, mode = 0;	// 0 .. oneshot  1 .. foreground  2 .. daemon
+	uint32_t n, mode = 0;	// 0 .. oneshot  1 .. foreground  2 .. daemon
 	int err = 0, res, pfd = -1, status = 0;
 	struct in_addr inaddr;
 	struct in6_addr in6addr;
@@ -462,21 +542,34 @@ main(int argc, char **argv) {
 			break;
 		switch (c) {
 			case 'D':
-				global.ignore_disabled_flag = true;
+				global.scfg.ignore_disabled_flag = true;
 				break;
 			case 'L':
 				global.promflags &= ~PROM_SCRAPETIME;
 				break;
 			case 'N':
-				global.drop_no_read = true;
+				global.scfg.drop_no_read = true;
+				break;
+			case 'P':
+				global.no_powerstats = true;
 				break;
 			case 'S':
 				global.promflags &= ~PROM_SCRAPETIME_ALL;
 				break;
+			case 'T':
+				global.scfg.no_thresholds = true;
+				break;
+			case 'U':
+				global.scfg.no_state = true;
+				break;
 			case 'V':
-				fputs("ipmimex " IPMIMEX_VERSION
-					"\n(C) 2021 " IPMIMEX_AUTHOR "\n", stdout);
+				getVersions(NULL, 1);
 				return 0;
+			case 'b':
+				if (global.scfg.bmc)
+					free(global.scfg.bmc);
+				global.scfg.bmc = strdup(optarg);
+				break;
 			case 'c':
 				global.promflags |= PROM_COMPACT;
 				break;
@@ -493,6 +586,12 @@ main(int argc, char **argv) {
 				if (global.logfile != NULL)
 					free(global.logfile);
 				global.logfile = strdup(optarg);
+				break;
+			case 'n':
+				err += disableMetrics(optarg);
+				break;
+			case 'o':
+				global.ipmitool = true;
 				break;
 			case 'p':
 				if ((sscanf(optarg, "%u", &n) != 1) || n == 0) {
@@ -529,6 +628,7 @@ main(int argc, char **argv) {
 					fprintf(stderr,"Invalid log level '%s'.\n",optarg);
 					err++;
 				} else {
+					ipmi_verbose++;
 					prom_log_level(n);
 				}
 				break;
@@ -559,16 +659,16 @@ main(int argc, char **argv) {
 	}
 	free(str);
 	free(addr);
-	global.exc_metrics = get_regex(&res, exm, "exclude metrics: ");
+	global.scfg.exc_metrics = get_regex(&res, exm, "exclude metrics: ");
 	free(exm);
 	err += res;
-	global.exc_sensors = get_regex(&res, exs, "exclude sensors: ");
+	global.scfg.exc_sensors = get_regex(&res, exs, "exclude sensors: ");
 	free(exs);
 	err += res;
-	global.inc_metrics = get_regex(&res, inm, "include metrics: ");
+	global.scfg.inc_metrics = get_regex(&res, inm, "include metrics: ");
 	free(inm);
 	err += res;
-	global.inc_sensors = get_regex(&res, ins, "include sensors: ");
+	global.scfg.inc_sensors = get_regex(&res, ins, "include sensors: ");
 	free(ins);
 	err += res;
 
@@ -589,7 +689,9 @@ main(int argc, char **argv) {
 	if (mode == 2)
 		pfd = daemonize();
 
-	if (start()) {
+	if ((global.sensor_list =
+		start(&(global.scfg), global.promflags & PROM_COMPACT)) == NULL)
+	{
 		status = SMF_EXIT_TEMP_DISABLE;
 		if (mode == 2) {
 			(void) write(pfd, &status, sizeof (status));
@@ -600,7 +702,8 @@ main(int argc, char **argv) {
 	// init
 	buf = psb_new(); // prevent that prom formatted output goes to stdout
 	str = getVersions(buf, global.promflags & PROM_COMPACT);
-	fprintf(stderr, "%s", str);
+	if (mode != 0)
+		fprintf(stderr, "%s", str);
 	if (strlen(str)) {
 		if (mode == 0) {
 			collect(NULL);
@@ -634,7 +737,8 @@ main(int argc, char **argv) {
 	// finally
 	psb_destroy(buf);
 	cleanupProm();
+	stop(global.sensor_list);
+	global.sensor_list = NULL;
 	free(global.addr);
-	stop();
 	return status;
 }

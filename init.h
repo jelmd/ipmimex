@@ -25,15 +25,20 @@ extern "C" {
 
 /**
  * @brief Initialize IPMI stack.
- * @return \c 0 on success, a number > 0 otherwise.
+ * @param cfg	The SDR scan configuration to use.
+ * @param compact	If \c true, no HELP/TYPE comments get generated and thus
+ *	will not be emitted in a client response.
+ * @return \c NULL on error, the sensor list otherwise.
  */
-uint start(void);
+sensor_t *start(scan_cfg_t *cfg, bool compact);
 
 /**
- * @brief Shutdown the IPMI stack.
+ * @brief Shutdown the IPMI stack and cleanup any allocated resources (and
+ *	prepare for exit).
+ * @param list	The list of sensors to release.
  * @return \c 0 on success, a number > 0 otherwise.
  */
-uint stop(void);
+void stop(sensor_t *list);
 
 char *getVersions(psb_t *report, bool compact);
 

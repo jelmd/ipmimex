@@ -30,6 +30,8 @@
 #include "hexdump.h"
 #endif
 
+int ipmi_verbose = 0;
+
 static bool is_open = false;
 static char *ipmi_dev = NULL;
 static int ipmi_fd = -1;

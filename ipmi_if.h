@@ -28,6 +28,8 @@
 extern "C" {
 #endif
 
+extern int ipmi_verbose;
+
 /**
  * @brief	IPMI message to send to the OS driver.
  */

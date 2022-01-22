@@ -13,10 +13,6 @@
 #include <unistd.h>
 #include <time.h>
 
-#ifdef IPMILIST
-#include <getopt.h>
-#endif
-
 #include <prom_string_builder.h>
 #include <prom_log.h>
 
@@ -67,14 +63,12 @@
 	if (_d) \
 		*(_d) = _a->ccode;
 
-int sdr_verbose = 0;
-
 ipmi_bmc_info_t *
 get_bmc_info(uint8_t *cc) {
 	int msgId;
 	static ipmi_bmc_info_t bmc_info;
 
-	if (sdr_verbose > 1)
+	if (ipmi_verbose > 1)
 		PROM_DEBUG("Getting BMC info.", "");
 	CMD_GET_DEV_ID(req, cc);
 
@@ -107,7 +101,7 @@ sdr_repo_info_t *
 get_repo_info(uint8_t *cc) {
 	int msgId;
 
-	if (sdr_verbose > 1)
+	if (ipmi_verbose > 1)
 		PROM_DEBUG("Getting repo info.", "");
 	// This implementation is not interested in satellite MCs/Devs alias 
 	// Device SDRs, but in the BMC managed repo (LUN 0), only.
@@ -136,7 +130,7 @@ uint16_t
 get_reservation(uint8_t *cc) {
 	int msgId;
 	
-	if (sdr_verbose > 1)
+	if (ipmi_verbose > 1)
 		PROM_DEBUG("Getting repo reservation", "");
 	CMD_GET_RESERVATION_ID(req, cc);
 	SEND(req, msgId, 0, "Failed to send reservation request.", "")
@@ -154,7 +148,7 @@ get_sdr(uint16_t *record_id, uint8_t *len, uint8_t *cc) {
 	int msgId;
 	uint16_t rid = *record_id, res_count_try = 0;
 
-	if (sdr_verbose > 1)
+	if (ipmi_verbose > 1)
 		PROM_DEBUG("Getting SDR 0x%04x", *record_id);
 	if (record_id == NULL || len == NULL) {
 		PROM_FATAL("Software bug: recordId & len must be != NULL", "");
@@ -225,9 +219,9 @@ again:
 		return NULL;
 	}
 
-	if (sdr_verbose) {
+	if (ipmi_verbose) {
 		const char *s =
-			(sdr_verbose > 1) ? hexdump((uint8_t *)sdr,*len + 1,1) : "";
+			(ipmi_verbose > 1) ? hexdump((uint8_t *)sdr,*len + 1,1) : "";
 		if (*len > 48) {
 			PROM_DEBUG("\nGot SDR 0x%04x for sensor 0x%02x:\n"
 				"\tsize: %ld/%ld\n\ttype: 0x%02x\n"
@@ -246,7 +240,7 @@ sdr_thresholds_t *
 get_thresholds(uint8_t snum, uint8_t *cc) {
 	int msgId;
 	
-	if (sdr_verbose > 1)
+	if (ipmi_verbose > 1)
 		PROM_DEBUG("Getting thresholds for sensor 0x%02x", snum);
 	CMD_GET_SENSOR_THRESHOLD(req, cc);
 	req.msg.data = &snum;
@@ -277,7 +271,7 @@ sdr_reading_t *
 get_reading(uint8_t snum, char *name, uint8_t *cc) {
 	int msgId;
 
-	if (sdr_verbose > 1)
+	if (ipmi_verbose > 1)
 		PROM_DEBUG("Getting value for sensor 0x%02x", snum);
 	CMD_GET_SENSOR_READING(req, cc);
 	req.msg.data = &snum;
@@ -303,9 +297,18 @@ get_reading(uint8_t snum, char *name, uint8_t *cc) {
 		if (rsp->data_len == sizeof(sdr_reading_t) - 1) {
 			((sdr_reading_t *) rsp->data)->state1 = 0;
 		} else {
+			// Gigabyte likes to send bogus answers for unconnected devices
+			if (((sdr_reading_t *) rsp->data)->unavailable) {
+				*cc = SDR_CC_SENSOR_NOT_FOUND;
+				return NULL;
+			}
 			PROM_WARN("Reading the value of sensor 0x%02x (%s) failed"
 				" - too short",
 				snum, name, rsp->data_len, (int) sizeof(sdr_reading_t));
+			if (ipmi_verbose > 1) {
+				PROM_DEBUG("response (%d bytes):\n%s",
+					rsp->data_len, hexdump(rsp->data, rsp->data_len, 1));
+			}
 			return NULL;
 		}
 	}
@@ -318,7 +321,7 @@ get_factors(uint8_t snum, uint8_t reading, uint8_t *cc) {
 	int msgId;
 	uint8_t data[2] = { snum, reading };
 
-	if (sdr_verbose > 1)
+	if (ipmi_verbose > 1)
 		PROM_DEBUG("Getting value for sensor 0x%02x", snum);
 	CMD_GET_SENSOR_FACTORS(req, cc);
 	req.msg.data = data;
@@ -383,8 +386,14 @@ free_sensor(sensor_t *sensor) {
 		scurr->next = NULL;
 		free(scurr->name);
 		free(scurr->factors);
-		free(scurr->unit);
+		free(scurr->it_unit);
 		free(scurr->it_thresholds);
+		free(scurr->prom.name);
+		free(scurr->prom.unit);
+		free(scurr->prom.mname_reading);
+		free(scurr->prom.mname_threshold);
+		free(scurr->prom.mname_state);
+		free(scurr->prom.note);
 		free(scurr);
 		scurr = rem;
 	}
@@ -400,21 +409,8 @@ free_sensor(sensor_t *sensor) {
 	IPMIT_NA_FMT IPMIT_NA_FMT IPMIT_NA_FMT \
 	IPMIT_NA_FMT IPMIT_NA_FMT IPMIT_NA_FMT
 
-/**
- * @brief Convert the given thresholds to a string using the ipmitool format.
- *	This may allow people to compare the output of \c ipmitool \c sensor with
- *	the output of ipmimex for easier bug hunting/troubleshooting.
- * @param t		Thresholds to convert (see table 43-1, .
- * @param analog_fmt	The analog (numeric) data format of the given
- *	thresholds (see table 43-1, Sensor Units 1, byte 21).
- * @param f		The factors to use to convert the given theresholds (see 
- *	IPMI v2, table 43-1, bytes  24:30 and 35.5).
- * @return A pointer to the newly allocated string containing the result. The
- *	callee has to take care to \c free() it, if not needed anymore.
- * @see IPMI v2, table 43-1.
- */
-static char *
-thresholds2ipmitoolstr(sdr_thresholds_t *t, uint8_t analog_fmt, factors_t *f) {
+char *
+thresholds2ipmitool_str(sdr_thresholds_t *t, uint8_t analog_fmt, factors_t *f) {
 	// name | value | unit | threshold_status  |lnr|lcr|lnc|unc|ucr|unr
 	//                                         ^^^^^^^^^^^^^^^^^^^^^^^^
 	uint8_t offset = 0, n;	// avoids buf overflow
@@ -502,7 +498,7 @@ scan_sdr_repo(uint32_t *count, bool ignore_disabled, bool drop_noread,
 				PROM_INFO("Ignoring 'disabled' flag of sensor '%s' (0x%02x).",
 					sdr->name.raw, sdr->keys.sensor_num);
 			} else {
-				PROM_INFO("Dropping disabled sensor '%s' (0x%02x) from list.",
+				PROM_INFO("Dropping sensor '%s' (0x%02x): disabled",
 					sdr->name.raw, sdr->keys.sensor_num);
 				free(sname);
 				continue;
@@ -524,10 +520,9 @@ scan_sdr_repo(uint32_t *count, bool ignore_disabled, bool drop_noread,
 		snew->owner_id = sdr->keys.owner_id;
 		snew->owner_lun = sdr->keys.owner_lun;
 		snew->sensor_num = sdr->keys.sensor_num;
-		snew->analog_fmt = sdr->unit.analog_fmt;
+		snew->unit = sdr->unit;
 		snew->category = sdr->category;
-		snew->unit = strdup(sdr_unit2str(sdr->unit.is_percent, sdr->unit.base,
-			sdr->unit.modifier_prefix, sdr->unit.modifier));
+		snew->it_unit = strdup(sdr_unit2str(&(sdr->unit)));
 		// Wondering, who has ever seen it ...
 		if (SDR_LTYPE_IS_NON_LINEAR(sdr->factors.linearization)) {
 			PROM_WARN("Slow sensor '%s' (SDR %d) found.", snew->name, sdr->id);
@@ -537,7 +532,7 @@ scan_sdr_repo(uint32_t *count, bool ignore_disabled, bool drop_noread,
 
 		get_reading(snew->sensor_num, snew->name, cc);
 		if (*cc == SDR_CC_SENSOR_NOT_FOUND) {
-			PROM_INFO("Dropping sensor '%s' (0x%02x) from list - probably "
+			PROM_INFO("Dropping sensor '%s' (0x%02x): probably "
 				"not populated/connected.", snew->name, snew->sensor_num);
 			free_sensor(snew);
 			if (snew == slist)
@@ -545,7 +540,7 @@ scan_sdr_repo(uint32_t *count, bool ignore_disabled, bool drop_noread,
 			continue;
 		}
 		if (drop_noread && *cc == SDR_CC_CMD_TMP_UNSUPPORTED) {
-			PROM_INFO("Dropping sensor '%s' (0x%02x) from list: no read.",
+			PROM_INFO("Dropping sensor '%s' (0x%02x): no read.",
 				snew->name, snew->sensor_num);
 			free_sensor(snew);
 			if (snew == slist)
@@ -554,15 +549,6 @@ scan_sdr_repo(uint32_t *count, bool ignore_disabled, bool drop_noread,
 		}
 		if (*cc != 0 && *cc != SDR_CC_CMD_TMP_UNSUPPORTED)
 			return slist;
-
-		sdr_thresholds_t *t = get_thresholds(snew->sensor_num, cc);
-		if (t == NULL) {
-			PROM_INFO("Sensor '%s' (0x%02x) provides no thresholds.",
-				snew->name, snew->sensor_num);
-		} else {
-			snew->it_thresholds =
-				thresholds2ipmitoolstr(t, snew->analog_fmt, snew->factors);
-		}
 
 		if (slast != NULL)
 			slast->next = snew;
@@ -579,13 +565,20 @@ bool
 sdrs_changed(sensor_t *head) {
 	sensor_t *s = head;
 	sdr_full_t *sdr;
-	uint8_t cc, len=8;
+	uint8_t cc = 0, len = 8;
 	uint16_t rid;
 	static uint32_t last_add = 0xFFFFFFFE, last_del = 0xFFFFFFFE, ladd, ldel;
 
 	sdr_repo_info_t *ri = get_repo_info(&cc);
+
+	if (ri == NULL)
+		return false;	// can't say anything, so assume a temp error
+
 	PROM_DEBUG("Repo: last add: %d/%d   last del: %d/%d",
 		last_add, ri->last_add, last_del, ri->last_del);
+
+	if (cc == 0 && head == NULL)
+		return true;
 	if (ri != NULL && last_add == ri->last_add && last_del == ri->last_del)
 		return false;
 	ladd = ri->last_add;
@@ -654,7 +647,7 @@ show_ipmitool_sensors(sensor_t *list, psb_t *sb, bool extended) {
 			goto next;
 		}
 		value = r->value;
-		tstate = r->state0;
+		tstate = r->state0 & 0x3F;
 		if (SDR_LTYPE_IS_NON_LINEAR(s->factors->linearization)) {
 			f = get_factors(s->sensor_num, value, &cc);
 			if (f == NULL)
@@ -665,7 +658,7 @@ show_ipmitool_sensors(sensor_t *list, psb_t *sb, bool extended) {
 		} else {
 			rf = s->factors;
 		}
-		real_val = sdr_convert_value(value, s->analog_fmt, rf);
+		real_val = sdr_convert_value(value, s->unit.analog_fmt, rf);
 		if (extended) {
 			sprintf(buf, " %04x |  %02x  |", s->record_id, s->sensor_num);
 			psb_add_str(sb, buf);
@@ -673,8 +666,20 @@ show_ipmitool_sensors(sensor_t *list, psb_t *sb, bool extended) {
 		// since we do not support discrete values, state is always 'ok'.
 		sprintf(buf, IPMIT_NAME_FMT IPMIT_ANALOG_FMT " " IPMIT_NA_FMT " "
 			IPMIT_ANALOG_STATE_FMT,
-			s->name, real_val, s->unit, "ok");
+			s->name, real_val, s->it_unit, "ok");
 		psb_add_str(sb, buf);
+
+		if (s->it_thresholds == NULL) {
+			sdr_thresholds_t *t = get_thresholds(s->sensor_num, &cc);
+			if (t == NULL) {
+				PROM_INFO("Sensor '%s' (0x%02x) provides no thresholds.",
+					s->name, s->sensor_num);
+			} else {
+				s->it_thresholds =
+					thresholds2ipmitool_str(t, s->unit.analog_fmt, s->factors);
+			}
+		}
+
 		if (s->it_thresholds)
 		   psb_add_str(sb, s->it_thresholds);
 		if (extended) {
@@ -713,154 +718,3 @@ next:
 		psb_destroy(sb);
 	}
 }
-
-
-#ifdef IPMILIST
-
-#define WAIT4REPO_SLOT	10			// seconds
-#define MAX_WAIT4REPO	300			// seconds
-
-
-static struct option sdr_opts[] = {
-	{ "ignore",		no_argument,	NULL, 'D'},
-	{ "drop-noread",no_argument,	NULL, 'N'},
-	{ "help",		no_argument,	NULL, 'h'},
-	{ "loglevel",	no_argument,	NULL, 'l'},
-	{ "verbose",	no_argument,	NULL, 'v'},
-	{ "extended",	no_argument,	NULL, 'x'},
-	{0, 0, 0, 0}
-};
-static const char *sdr_short_opts  = { "DNhl:vx" };
-static const char *sdr_short_usage = { "[-DNhvx]i [-l {DEBUG|INFO|WARN|ERROR}"};
-
-int
-main(int argc, char **argv) {
-	uint32_t sensors;
-	uint8_t res = 0, cc;
-	struct timespec start, end;
-	int max_tries;
-	sensor_t *slist = NULL;
-	bool ignore_disabled_flag = false, extended = false, drop_noread = false;
-
-	while (1) {
-		int c, optidx = 0;
-		c = getopt_long (argc, argv, sdr_short_opts, sdr_opts, &optidx);
-		if (c == -1)
-			break;
-		switch (c) {
-			case 'D':
-				ignore_disabled_flag = true;
-				break;
-			case 'N':
-				drop_noread = true;
-				break;
-			case 'v':
-				prom_log_level(PLL_DBG);
-				sdr_verbose++;
-				break;
-			case 'l':
-				cc = prom_log_level_parse(optarg);
-				if (cc == 0)
-					fprintf(stderr,"Invalid log level '%s' ignored.\n",optarg);
-				else {
-					prom_log_level(cc);
-					if (cc ==  PLL_DBG)
-						sdr_verbose++;
-				}
-				break;
-			case 'x':
-				extended = true;
-				break;
-			case 'h':
-			case '?':
-				fprintf(stderr, "Usage: %s %s\n", argv[0], sdr_short_usage);
-				return (1);
-		}
-	}
-
-	if ((res = ipmi_if_open(NULL)) != 0)
-		return 99;
-
-	max_tries = MAX_WAIT4REPO/WAIT4REPO_SLOT;
-	while (max_tries > 0) {
-		ipmi_bmc_info_t *bmc = get_bmc_info(&cc);
-		if (SDR_REPO_TMP_NA(cc)) {
-			sleep(WAIT4REPO_SLOT);
-			max_tries--;
-			continue;
-		}
-		if (bmc == NULL) {
-			PROM_WARN("  Could not obtain BMC info!!!\n"
-"  If it is not IPMI v1.0, v1.5 or v2.0 compatible, shown results (if any)\n"
-"  might be total non-sense.\n", "");
-		} else if (!bmc->supports_sensor) {
-			PROM_ERROR("BMC does not support SDR sensor device commands.", "")
-			res = 98;
-			goto end;
-		}
-		break;
-	}
-
-	int r;
-	time_t s;
-	long ns;
-	double duration;
-	max_tries = MAX_WAIT4REPO/WAIT4REPO_SLOT;
-	while (max_tries > 0) {
-		clock_gettime(CLOCK_MONOTONIC, &start);
-		slist = scan_sdr_repo(&sensors, ignore_disabled_flag, drop_noread, &cc);
-		if (SDR_REPO_TMP_NA(cc)) {
-			free_sensor(slist);
-			slist = NULL;
-			sleep(WAIT4REPO_SLOT);
-			max_tries--;
-			continue;
-		}
-		if (cc == 0) {
-			r = clock_gettime(CLOCK_MONOTONIC, &end);
-			s = (r == 0) ? end.tv_sec - start.tv_sec : 0;
-			ns = (r == 0) ? end.tv_nsec - start.tv_nsec : 0;
-			duration = s + ns*1e-9;
-			PROM_INFO("Sensor list population took %f seconds.", duration);
-			PROM_INFO("Using %d sensors", sensors);
-		} else {
-			res = 97;
-			goto end;
-		}
-		break;
-	}
-	clock_gettime(CLOCK_MONOTONIC, &start);
-	show_ipmitool_sensors(slist, NULL, extended);
-	r = clock_gettime(CLOCK_MONOTONIC, &end);
-	s = (r == 0) ? end.tv_sec - start.tv_sec : 0;
-	ns = (r == 0) ? end.tv_nsec - start.tv_nsec : 0;
-	duration = s + ns*1e-9;
-	PROM_INFO("Getting/printing sensor values took %f seconds.", duration);
-
-	clock_gettime(CLOCK_MONOTONIC, &start);
-	if (!sdrs_changed(slist)) {
-		r = clock_gettime(CLOCK_MONOTONIC, &end);
-		s = (r == 0) ? end.tv_sec - start.tv_sec : 0;
-		ns = (r == 0) ? end.tv_nsec - start.tv_nsec : 0;
-		duration = s + ns*1e-9;
-		PROM_INFO("SDR change check took %f seconds.", duration);
-	} else {
-		PROM_DEBUG("1+ SDR changed.", "");
-	}
-	// 2nd time should be shorter because no list scanning
-	clock_gettime(CLOCK_MONOTONIC, &start);
-	if (!sdrs_changed(slist)) {
-		r = clock_gettime(CLOCK_MONOTONIC, &end);
-		s = (r == 0) ? end.tv_sec - start.tv_sec : 0;
-		ns = (r == 0) ? end.tv_nsec - start.tv_nsec : 0;
-		duration = s + ns*1e-9;
-		PROM_INFO("SDR change check2 took %f seconds.", duration);
-	} else {
-		PROM_DEBUG("1+ SDR changed.", "");
-	}
-end:
-	ipmi_if_close();
-	free_sensor(slist);
-	return res;
-}
-#endif // IPMILIST

@@ -67,16 +67,12 @@ double sdr_convert_value(uint8_t val, uint8_t afmt, factors_t *f);
 /**
  * @brief Convert the Sensor 1, 2, and 3 properties of an SDR to a human
  *	readable string.
- * @param pct		Unit represents a percentage.
- * @param base		The unit base.
- * @param mprefix	An optional prefix of the unit modifier. Supported are all
- *		SDR_UNIT_MODIFIER_PREFIX_* values.
- * @param modifier  The unit modifier (alias suffix for unit base).
+ * @param unit		A pointer to SDR sensor unit 1 (byte 21).
  *
  * @returns \c NULL on error, a pointer to static string which gets overwritten
  *	on the next call of this function otherwise.
  */
-const char *sdr_unit2str(bool pct, uint8_t base, uint8_t mprefix, uint8_t modifier);
+const char *sdr_unit2str(unit_t *unit);
 
 /**
  * @brief	Convert a SDR name as specified in IPMI v2, table 43-1 to UTF-8.
@@ -98,6 +94,7 @@ const char *sdr_unit2str(bool pct, uint8_t base, uint8_t mprefix, uint8_t modifi
  */
 char *sdr_str2utf8(const uint8_t *raw, uint8_t len, uint8_t fmt);
  
+
 #ifdef __cplusplus
 }
 #endif

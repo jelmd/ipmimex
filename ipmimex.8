@@ -8,7 +8,8 @@ ipmimex \- a metrics exporter for BMC
 .na
 .HP
 .B ipmimex
-[\fB\-DLNSVcdfh\fR]
+[\fB\-DLNPSTUVcdfh\fR]
+[\fB\-b\ \fIbmc_path\fR]
 [\fB\-l\ \fIfile\fR]
 [\fB\-p\ \fIport\fR]
 [\fB\-s\ \fIip\fR]
@@ -23,12 +24,14 @@ ipmimex \- a metrics exporter for BMC
 .SH "DESCRIPTION"
 .B ipmimex
 is a \fBm\fRetrics \fBex\fRporter for Board Management Controller (BMC)
-and similar devices, which are directly accessible via from the host running
-this utility using the Intelligent Platform Management Interface (IPMI).
-Collected data can be exposed via HTTP in Prometheuse exposition format [1]
+and similar devices, which are directly accessible from the host running
+this utility using the system'ss \fBI\fRntelligent \fBP\fRlatform
+\fBM\fRanagement \fBI\fRnterface (\fBIPMI\fR).
+Collected data can be exposed via HTTP in Prometheus exposition format [1]
 e.g. using the default endpoint URL
-\fBhttp://\fIhostname\fB:\fI9290\fB/metrics\fR and thus visualized e.g. using
-Grafana [2], Netdata [3], or Zabbix [4].
+\fBhttp://\fIhostname\fB:\fI9290\fB/metrics\fR (optionally via
+\fBhttp://\fIhostname\fB:\fI9290\fB/overview\fR in a ipmitool sensor like
+format) and thus visualized e.g. using Grafana [2], Netdata [3], or Zabbix [4].
 
 In contrast to prometheus' ipmi_exporter and other IPMI based metrics gatherers
 \fBipmimex\fR is written in plain C (having KISS in mind)
@@ -45,24 +48,25 @@ running \fBipmimex\fR as an normal, unprivileged user should be preferred.
 
 Note that for now \fBipmimex\fR supports threshold-based, non-discrete sensors,
 only. This decision has been made to keep it simple and because usually no-one
-needs them, or if needed \fBipmievd\fR(8) or SNMP tools, etc. already take care
-of it.
+needs the others, or if needed \fBipmievd\fR(8) or SNMP tools, etc. already
+take care of it.
 
-BMC device are usually slow and a priori not designed to handle IPMI queries
+BMCs are usually slow and a priori not designed to handle IPMI queries
 in parallel (IPMI specifications explicitly mentions this). So one should avoid
 to query any metrics not really needed. One may use the options \fB-x\fR,
 \fB-X\fR, \fB-i\fR, and \fB-I\fR with an extended regular expression (regex)
 argument to exclude/include metrics (lower case options) and to exclude/include
 sensors by name (upper case options). Since the list of sensors to query gets
-constructed on the start of the \fBipmimex\fR (or if a change in the SDR
+constructed on the start of the \fBipmimex\fR (or if a change in the
+\fBS\fRensor \fBD\fRata \fBR\fRecord (\fBSDR\fR)
 repository requires a re-scan), the complexity of the regex arguments have no
-impact when metrics get queried by a client. So there is no need to spent time
-for optimizing - instead keep it small and simple. The include options take
-precedence over exclude options. So one may exclude all metrics (e.g. -x '.*')
-and include only the power usage of the box (e.g. -i '.*_dcmi_power_.*'). The
-experience shows, that usually the reading for the later gets returned really
-fast, but the reading of a single other sensor takes ~ 2-5 ms (the scanning of
-the whole SDR repository ~ 1-3 s).
+impact when metrics get queried by a client. So there is no need to spent much
+time for optimizing the regexs - instead keep it small and simple.
+The include options take precedence over exclude options. So one may exclude
+all metrics (e.g. -x '.*') and include only the power usage of the
+box (e.g. -i '.*_dcmi_power_.*'). The experience shows, that usually the
+reading for the later gets returned really fast, but the reading of a single
+other sensor takes ~ 2-5 ms (the scanning of the whole SDR repository ~ 1-3 s).
 
 \fBipmimex\fR operates in 3 modes:
 
@@ -87,33 +91,36 @@ Use option \fB-d\fR to request this mode.
 \fBipmimex\fR answers one HTTP request after another to have a
 very small footprint wrt. the system and queried device. So it is
 recommended to adjust your firewalls and/or HTTP proxies accordingly.
-If you need SSL or authentication, use a HTTP proxy like nginx - for now
-\fBipmimex\fR should be kept small and simple.
+If you need SSL or authentication, use a HTTP proxy like nginx - remember:
+\fBipmimex\fR should be kept as small and simple as possible.
 
 When \fBipmimex\fR runs in \fBforeground\fR or \fBdaemon\fR mode, it also
-returns by default the duration it took to collect and format:
+returns by default the duration of the following data collect and format tasks:
 .RS 2
 .TP 2
 .B default
-HTTP related statistics
+HTTP related statistics.
 .TP
 .B process
-\fBipmimex\fR process related data
+\fBipmimex\fR process related data.
 .TP
 .B ipmi
-data obtained via IPMI
+Sensor data via normal IPMI and DCMI commands.
 .TP
 .B libprom
-everything (i.e. overall incl. default, process and nvidia).
+All tasks together, i.e. sum of the default, process, and ipmi task.
 .RE
 
 .SH "OPTIONS"
+.P
+The following options are supported:
+
 .TP 4
 .B \-D
 .PD 0
 .TP
 .B \-\-ignore\-disabled\-flag
-Some buggy BMCs flag sensors as \fBD\fRisabled in the SDR capabilities but
+Some buggy BMCs mark sensors as \fBD\fRisabled in the SDR capabilities but
 they provide normal reading values and thresholds. So if you miss some sensors
 in your list, just try this option and see, whether you get more. Dell iDRACs
 are know to have this bug.
@@ -124,7 +131,7 @@ are know to have this bug.
 .TP
 .B \-\-no\-scrapetime
 Disable the overall scrapetime metrics (libprom collector), i.e. the time
-elapsed when scraping all the required data. One needs also disable
+elapsed when scraping all the required data. One needs to also disable
 collecting scrapetimes of all other collectors before this option
 gets honored.
 
@@ -135,13 +142,28 @@ gets honored.
 .B \-\-drop\-no\-read
 Some BMC firmware (like Sun's ILOMs) provide SDRs for devices/sensors not yet
 populated/conncted. If they get queried, a more or less generic command
-completion code gets returned: Command not supported in present state. Hmmm,
-hard to say, why and whether it will come up with the next ... So per default
-such devices gets always querried and in case of Sun ILOMs will always return
-no result. So useless to query - use this option to exclude such sensors. On
-an X4600M2 e.g. with two CPU boards this reduces the number of queried sensors
-from 96 to 52! So if in doubt, just use this option an \fBipmimex\fR reports
-the sensors skipped, if any.
+completion code gets returned: "Command not supported in present state". Hmmm,
+hard to guess the real cause of it and whether it will come up within the
+next ...
+So per default such devices gets always querried and in case of Sun ILOMs will
+always return no result and thus in this case useless to query.
+Ergo one may use this option to exclude such sensors. On a X4600M2 e.g. with
+two CPU boards this reduces the number of sensors to query from 96 to 52 and cuts the query cycle time to almost the half!
+Ergo the final recommendation: If in doubt, just use this option.
+\fBipmimex\fR will report the sensors skipped, if any.
+
+.TP
+.B \-P
+.PD 0
+.TP
+.B \-\-no\-powerstats
+Minor optimization to reduce bandwidth and resource usage. The response to a
+dcmi power reading command contains some statistical values like min, max and
+average power usage of a certain sample period, and the width of this sample
+period in seconds (some BMC use seconds since last boot, some 1s, some 10s,
+etc.). So if one uses a timeseries database and Grafana or similar monitors,
+those are more or less redundant, useless data - there is no need to
+transfer it over the wire or to store it in a database.
 
 .TP
 .B \-S
@@ -151,17 +173,54 @@ the sensors skipped, if any.
 Disable recording the scrapetime of each collector separately. There is
 one collector named \fBdefault\fR, which collects HTTP request/response
 statistics, the optional \fBprocess\fR collector, which records metrics
-about the ipmimex process itself, the \fBnvidia\fR collector, which queries
-all the GPUs devices for metrics, and finally the \fBlibprom\fR collector,
+about the ipmimex process itself, the \fBipmi\fR collector, which queries
+all the BMC for metrics, and finally the \fBlibprom\fR collector,
 which just records the time it took to collect and prom-format the data
 of all other collectors.
+
+.TP
+.B \-T
+.PD 0
+.TP
+.B \-\-no\-thresholds
+Disable all \fI*\fB_threshold_*\fR metrics.
+By default a sensor usually provides up to
+6 different thresholds (\fBn\fRon-\fBr\fRecoverable, \fBcr\fritical,
+\fBn\fRon-\fBc\fRritical for upper and lower bounds) and when reporting it
+is disabled, it saves some bandwith (~300-500 bytes/sensor uncompressed).
+However, in good timeseries databases like VictoriaMetrics such constant
+values usually consume very little space and it doesn't hurt much to have
+them available for visualizations, too. Thresholds get queried, formatted and
+cached at the SDR repository scan phase, so pretty cheap for each client
+request.
+
+.TP
+.B \-U
+.PD 0
+.TP
+.B \-\-no\-state
+A minor bandwith optimization. The sensor reading command response contains
+the threshold state as well, and therefore gets reported, too (4 .. >= upper
+non-recoverable, 2 .. >= upper critical, 1 .. >= upper non-critical
+and -1 .. <= lower non-critical, -2 .. <= lower critical, -4 .. <= lower
+non-recoverable bound).
+Using this option reduces bandwith (~60-80 bytes/sensor) and
+database resource usage (constant like) marginal.
 
 .TP
 .B \-V
 .PD 0
 .TP
-.B \-\-no\-scrapetime\-all
+.B \-\-version
 Print \fBipmimex\fR version info and exit.
+
+.TP
+.BI \-b  " path"
+.PD 0
+.TP
+.BI \-\-bmc= " path"
+Use the given \fIpath\fR to access the desired BMC. If not given, the default
+platform specific path (e.g. Linux: /dev/ipmi0, Solaris: /dev/bmc) will be used.
 
 .TP
 .B \-c
@@ -206,7 +265,38 @@ Log all messages to the given \fIfile\fR when the main process is running.
 .PD 0
 .TP
 .BI \-\-no-metric= list
-Skip all the metrics given in the comma separated \fIlist\fR of metric names.
+Skip all the metrics given in the comma separated \fIlist\fR of identifiers.
+Currently supported are:
+
+.RS 4
+
+.TP 4
+.B version
+All \fBipmimex_version\fR metrics (default collector).
+.TP 4
+.B ipmi
+All \fBipmimex_ipmi_*\fR metrics (ipmi collector). See option \-x, \-X, \-i
+and \-I for a little bit more fine grained selection.
+.TP 4
+.B dcmi
+All \fBipmimex_dcmi_*\fR metrics. Right now power reading is supported,
+only (ipmi collector).
+.TP 4
+.B process
+All \fBipmimex_process_*\fR metrics (process collector).
+
+.RE
+
+.TP
+.B \-o
+.PD 0
+.TP
+.B \-\-overview
+If ipmimex runs in \fBforeground\fR or \fBdaemon\fR mode, enable an
+ipmitool sensor look alike output under the URL path \fB/overview\fR.
+As \fB/metrics\fR it triggers a new full cycle of sensor requests and therefore
+you should take care to not overwhelm your BMC (a whole cycle usually takes
+about 0.2 .. 0.3 seconds).
 
 .TP
 .BI \-p " num"
@@ -235,38 +325,47 @@ Set the message verbosity to the given \fIlevel\fR. Accepted tokens are
 \fBDEBUG\fR, \fBINFO\fR, \fBWARN\fR, \fBERROR\fR, \fBFATAL\fR and for
 convenience \fB1\fR..\fB5\fR respectively.
 
+.P
+The following flags are related to the ipmi task and compared against sensor
+reading metrics (\fBipmimex_ipmi_*\fR), only.
+To disable all \fB*_threshold\fR or \fB*_state\fR metrics one may use
+the option \-T and \-U respectively.  If you need a more fine grained
+selection, consider to use a proxy (e.g.  VictoriaMetrics vmagent or nginx,
+etc.).
+
 .TP
 .BI \-x " regex"
 .PD 0
 .TP
 .BI \-\-exclude-metrics= regex
-Exclude all metrics whoms name matches the given extended regular expression
-\fIregex\fB (see also \fBregcomp\fR(3C)).
+Exclude all metrics from the ipmi task whoms name matches the given extended
+regular expression \fIregex\fR (see also \fBregcomp\fR(3C)).
 
 .TP
 .BI \-X " regex"
 .PD 0
 .TP
 .BI \-\-exclude-sensors= regex
-Exclude all metrics whoms sensor name matches the given extended regular
-expression \fIregex\fB (see also \fBregcomp\fR(3C)).
+Exclude all metrics from the ipmi task whoms sensor name matches the given
+extended regular expression \fIregex\fR (see also \fBregcomp\fR(3C)).
 
 .TP
 .BI \-i " regex"
 .PD 0
 .TP
 .BI \-\-include-metrics= regex
-Include all metrics whoms name matches the given extended regular expression
-\fIregex\fB (see also \fBregcomp\fR(3C)). Takes precedence over excludes.
+Include all metrics from the ipmi task whoms name matches the given extended
+regular expression \fIregex\fR (see also \fBregcomp\fR(3C)). Takes precedence
+over excludes (see -X ... and -x ...).
 
 .TP
 .BI \-I " regex"
 .PD 0
 .TP
 .BI \-\-include-sensors= regex
-Include all metrics whoms sensor name matches the given extended regular
-expression \fIregex\fB (see also \fBregcomp\fR(3C)). Takes precedence over
-excludes.
+Include all metrics from the ipmi task whoms sensor name matches the given
+extended regular expression \fIregex\fR (see also \fBregcomp\fR(3C)). Takes
+precedence over excludes (see -X ... and -x ...).
 
 .SH "EXIT STATUS"
 .TP 4

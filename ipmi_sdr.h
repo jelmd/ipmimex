@@ -26,8 +26,6 @@
 extern "C" {
 #endif
 
-extern int sdr_verbose;
-
 // important command completion codes (kind of temp. errors)
 #define SDR_CC_INVALID_CMD				0xC1
 #define SDR_CC_INVALID_LUN_CMD			0xC2
@@ -197,6 +195,23 @@ typedef struct sdr_reading {
 
 /** @brief	IPMI v2, table 43-1, Full Sensor, byte (6:23) is the common part
  * for all SDRs, byte(24:63) the specific part for a full SDR. (43.1) */
+typedef struct unit {
+		BITFIELD4(				// (21) Sensor Units 1
+			analog_fmt:2,		//	- [7:6] analog (numeric) Data Format
+			period:3,			//	- [5:3] per {,µs,ms,s,min,h,d,}
+			modifier_prefix:2,	//	- [2:1] prefix modifier {'','*','/',''}
+			is_percent:1		//	- [0] percentage
+		);
+#		define SDR_UNIT_FMT_IS_DISCRETE(_v)	(((_v) & 3) == 3)// wrt. analog_fmt
+#		define SDR_UNIT_MODIFIER_PREFIX_NONE 0			// ''
+#		define SDR_UNIT_MODIFIER_PREFIX_DIV 1			// base / modifier
+#		define SDR_UNIT_MODIFIER_PREFIX_MUL 2			// base * modifier
+#		define SDR_UNIT_MODIFIER_PREFIX_RSVD 3			// '' (Reserved)
+
+		uint8_t base;			// (22) Base unit - see table 43-15
+		uint8_t modifier;		// (23) Modifier unit. 0 if unused.
+} PACKED unit_t;
+
 typedef struct sdr_full {
 	// SENSOR RECORD HEADER (1:5)
 	uint16_t id;			// 	(1:2) SDR ID
@@ -266,22 +281,7 @@ typedef struct sdr_full {
 		uint16_t discrete;		// (19:20)
 	} PACKED mask;
 
-	struct {
-		BITFIELD4(				// (21) Sensor Units 1
-			analog_fmt:2,		//	- [7:6] analog (numeric) Data Format
-			period:3,			//	- [5:3] per {,µs,ms,s,min,h,d,}
-			modifier_prefix:2,	//	- [2:1] prefix modifier {'','*','/',''}
-			is_percent:1		//	- [0] percentage
-		);
-#		define SDR_UNIT_FMT_IS_DISCRETE(_v)	(((_v) & 3) == 3)// wrt. analog_fmt
-#		define SDR_UNIT_MODIFIER_PREFIX_NONE 0			// ''
-#		define SDR_UNIT_MODIFIER_PREFIX_DIV 1			// base / modifier
-#		define SDR_UNIT_MODIFIER_PREFIX_MUL 2			// base * modifier
-#		define SDR_UNIT_MODIFIER_PREFIX_RSVD 3			// '' (Reserved) 
-
-		uint8_t base;			// (22) Base unit - see table 43-15
-		uint8_t modifier;		// (23) Modifier unit. 0 if unused.
-	} PACKED unit;
+	unit_t unit;
 
 	// END of common SDR data byte(6:23)
 
@@ -369,20 +369,29 @@ typedef struct factors {
 	uint8_t direction;				// as is
 } factors_t;
 
+typedef struct prom {
+	char *name;
+	char *unit;
+	char *mname_reading;
+	char *mname_threshold;
+	char *mname_state;
+	char *note;
+} prom_t;
 
 /** @brief Synthetic sensor record */
 typedef struct sensor {
-	char *name;				// sdr->name.raw converted to latin1
+	char *name;			// sensor name (UTF-8)
 	uint16_t record_id;
 	uint8_t owner_id;
 	uint8_t owner_lun;
 	uint8_t sensor_num;
-	uint8_t analog_fmt;
-	uint8_t category;		// see full_sensor_t category - table 42-3 (42.2)
-	factors_t *factors;		// NULL indicates non-linear: need to fetch factors
-							// for each reading.
-	char *unit;
+	unit_t unit;
+	uint8_t category;	// see full_sensor_t category - table 42-3 (42.2)
+	factors_t *factors;	// NULL indicates non-linear: need to fetch factors
+						// for each reading.
+	char *it_unit;
 	char *it_thresholds;	// ipmitool like formatted thresholds
+	prom_t prom;			// prom related names
 	struct sensor *next;
 } sensor_t;
 
@@ -524,6 +533,22 @@ sensor_t *scan_sdr_repo(uint32_t *count, bool ignore_disabled, bool drop_noread,
  *	old one e.g. to avoid using wrong thresholds and convertion factors.
  */
 bool sdrs_changed(sensor_t *head);
+
+/**
+ * @brief	Convert the given thresholds to a string using the ipmitool format.
+ *	This may allow people to compare the output of \c ipmitool \c sensor with
+ *	the output of ipmimex for easier bug hunting/troubleshooting.
+ * @param t				Thresholds to convert (see table 35-9, Get Sensor
+ *	Thresholds Command).
+ * @param analog_fmt	The analog (numeric) data format of the given
+ *  thresholds (see table 43-1, Sensor Units 1, byte 21).
+ * @param f     The factors to use to convert the given theresholds (see
+ *  IPMI v2, table 43-1, bytes  24:30 and 35.5).
+ * @return A pointer to the newly allocated string containing the result. The
+ *  callee has to take care to \c free() it, if not needed anymore.
+ * @see IPMI v2, table 43-1.
+ */
+char *thresholds2ipmitool_str(sdr_thresholds_t *t, uint8_t analog_fmt, factors_t *f);
 
 /**
  * @brief Get the values of the given list of sensors, format them and related

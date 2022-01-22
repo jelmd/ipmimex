@@ -19,6 +19,7 @@
 
 #include "mach.h"
 
+#include "ipmi_if.h"
 #include "ipmi_sdr.h"
 #include "ipmi_sdr_convert.h"
 
@@ -267,7 +268,7 @@ static const char *sensor_category[] = {
 };
 
 const char *
-sdr_type2str(uint8_t type) {
+sdr_category2str(uint8_t type) {
 	if (type >= 0xC0)
 		return "Unknown OEM";
 	if (type < ARRAY_SIZE(sensor_category))
@@ -400,7 +401,7 @@ sdr_factors2factors(sdr_factors_t *f) {
 	rf->A = f->accuracy_ls | (((uint32_t) f->B_ms) << 6);
 	rf->Aexp = f->accuracy_exp;
 
-	if (sdr_verbose > 1) {
+	if (ipmi_verbose > 1) {
 		PROM_DEBUG("factors:\n"
 			"M_ls:        %02x\n"
 		 	"M_ms:        %02x   tolerance:    %02x\n"
@@ -473,30 +474,30 @@ sdr_convert_value(uint8_t val, uint8_t afmt, factors_t *f) {
 }
 
 const char *
-sdr_unit2str(bool as_pct, uint8_t base, uint8_t mprefix, uint8_t mod) {
+sdr_unit2str(unit_t *u) {
 	// base + modifier + mprefix + '\0'
 	static char buf[2 * SDR_UNIT_MAX_STRLEN + 2 + 1];
 	char *idx = buf;
 	int len;
 
-	const char *sbase = base == 0
+	const char *sbase = u->base == 0
 		? ""
-		: (base < ARRAY_SIZE(sdr_unit)) ? sdr_unit[base] : "???";
-	const char *smod = mod == 0
+		: (u->base < ARRAY_SIZE(sdr_unit)) ? sdr_unit[u->base] : "???";
+	const char *smod = u->modifier == 0
 		? ""
-		: (mod < ARRAY_SIZE(sdr_unit)) ? sdr_unit[mod] : "???";
+		: (u->modifier < ARRAY_SIZE(sdr_unit)) ? sdr_unit[u->modifier] : "???";
 
-	if (as_pct)
+	if (u->is_percent)
 		return "percent";		// this is closer to prom names than '%'
 
 	len = strlen(sbase);
 	strncpy(idx, sbase, len);
 	idx += len;
 
-	if (mprefix == SDR_UNIT_MODIFIER_PREFIX_MUL) {
+	if (u->modifier_prefix == SDR_UNIT_MODIFIER_PREFIX_MUL) {
 		*idx = '*';
 		idx++;
-	} else if (mprefix == SDR_UNIT_MODIFIER_PREFIX_DIV) {
+	} else if (u->modifier_prefix == SDR_UNIT_MODIFIER_PREFIX_DIV) {
 		*idx = '/';
 		idx++;
 	}

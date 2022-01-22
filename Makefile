@@ -7,7 +7,7 @@
 #
 # Copyright 2021 Jens Elkner (jel+ipmimex-src@cs.ovgu.de)
 
-VERSION = "0.1.0"
+VERSION = "1.0.0"
 
 PREFIX ?= /usr
 BINDIR ?= sbin
@@ -94,11 +94,14 @@ SONAME= $(SOBN).$(DYNLIB_MAJOR)
 # uncomment to get a lib
 #DYNLIB= $(SONAME).$(DYNLIB_MINOR)
 
-LIBSRCS= $(IF_DEV).c init.c hexdump.c ipmi_sdr_convert.c
+LIBSRCS= hexdump.c $(IF_DEV).c ipmi_sdr_convert.c ipmi_sdr.c
 LIBOBJS= $(LIBSRCS:%.c=%.o)
 
 PROGSRCS = $(LIBSRCS)
 PROGOBJS = $(PROGSRCS:%.c=%.o)
+
+LISTOBJS = ipmilist.o
+MEXOBJS = init.o prom_ipmi.o main.o
 
 all:	$(PROGS)
 lib:	$(DYNLIB)
@@ -112,20 +115,15 @@ $(DYNLIB): Makefile $(LIBOBJS)
 	$(CC) -o $@ $(SHARED) $(SONAME_OPT)$(SONAME) $(LIBOBJS) $(LIBCFLAGS)
 	ln -sf $(DYNLIB) $(SONAME)
 
-ipmimex:	Makefile $(DYNLIB) $(PROGOBJS) main.o ipmi_sdr.o
+ipmimex:	Makefile $(DYNLIB) $(PROGOBJS) $(MEXOBJS)
 	@echo $(PROGOBJS)
-	[ -z $(DYNLIB) ] && $(CC) -o $@ $(PROGOBJS) main.o ipmi_sdr.o $(LDFLAGS) ||\
-	$(CC) -o $@ main.o $(DYNLIB) $(LDFLAGS)
+	[ -z $(DYNLIB) ] && $(CC) -o $@ $(PROGOBJS) $(MEXOBJS) $(LDFLAGS) ||\
+	$(CC) -o $@ $(MEXOBJS) $(DYNLIB) $(LDFLAGS)
 
-ipmilist.o: CFLAGS += -DIPMILIST
-
-ipmilist.o: Makefile ipmi_sdr.c
-	$(COMPILE.c) $(OUTPUT_OPTION) ipmi_sdr.c
-
-ipmilist:	Makefile $(DYNLIB) $(PROGOBJS) ipmilist.o
+ipmilist:	Makefile $(DYNLIB) $(PROGOBJS) $(LISTOBJS)
 	@echo $(PROGOBJS)
-	[ -z $(DYNLIB) ] && $(CC) -o $@ $(PROGOBJS) ipmilist.o $(LDFLAGS) || \
-	$(CC) -o $@ ipmilist.o $(DYNLIB) $(LDFLAGS)
+	[ -z $(DYNLIB) ] && $(CC) -o $@ $(PROGOBJS) $(LISTOBJS) $(LDFLAGS) || \
+	$(CC) -o $@ $(LISTOBJS) $(DYNLIB) $(LDFLAGS)
 
 .PHONY:	clean distclean install depend
 

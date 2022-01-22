@@ -25,7 +25,7 @@
 #include "hexdump.h"
 #endif
 
-extern int sdr_verbose;
+int ipmi_verbose = 0;
 
 static bool is_open = false;
 static char *ipmi_dev = NULL;
@@ -177,7 +177,7 @@ again:
 		PROM_WARN("Fetching data for request %d failed: %s", msgid, str);
 		return NULL;
 	}
-	if (sdr_verbose > 1)
+	if (ipmi_verbose > 1)
 		PROM_DEBUG("Slept %d times for %d ms", rem - maxtries, WAIT_TIME_IN_MS);
 
 	bmc_rsp_t *bmc_res;
