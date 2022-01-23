@@ -34,7 +34,7 @@ INSTALL ?= $(INSTALL_$(OS))
 IF_DEV ?= $(IF_$(OS))
 USE_CC ?= $(CC_$(OS))
 
-# Since make setes CC automagically, we have to use the USE_CC kludge.
+# Since make sets CC automagically, we have to use the USE_CC kludge.
 CC = $(USE_CC)
 
 # If CC is set to 'cc', *_cc flags (Sun studio compiler) will be used.

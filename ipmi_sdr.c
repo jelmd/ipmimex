@@ -614,9 +614,6 @@ show_ipmitool_sensors(sensor_t *list, psb_t *sb, bool extended) {
 	bool free_sb = sb == NULL;
 	char buf[512];
 
-	if (s == NULL)
-		return;
-
 	// remember sb state
 	if (free_sb)
 		sb = psb_new();

@@ -28,9 +28,11 @@ extern "C" {
  * @param cfg	The SDR scan configuration to use.
  * @param compact	If \c true, no HELP/TYPE comments get generated and thus
  *	will not be emitted in a client response.
+ * @param sensors	Set to the number of sensors which need to be queried on
+ *	client requests.
  * @return \c NULL on error, the sensor list otherwise.
  */
-sensor_t *start(scan_cfg_t *cfg, bool compact);
+sensor_t *start(scan_cfg_t *cfg, bool compact, uint32_t *sensors);
 
 /**
  * @brief Shutdown the IPMI stack and cleanup any allocated resources (and

@@ -110,24 +110,23 @@ collect_dcmi(psb_t *sb, bool compact, bool no_powerstats) {
 	sprintf(buf, "%d\n", p->curr);
 	psb_add_str(sb, buf);
 
-	if (no_powerstats)
-		return;
+	if (!no_powerstats) {
+		psb_add_str(sb, IPMIMEXM_DCMI_POWER_N "{value=\"min\"} ");
+		sprintf(buf, "%d\n", p->min);
+		psb_add_str(sb, buf);
+		psb_add_str(sb, IPMIMEXM_DCMI_POWER_N "{value=\"max\"} ");
+		sprintf(buf, "%d\n", p->max);
+		psb_add_str(sb, buf);
+		psb_add_str(sb, IPMIMEXM_DCMI_POWER_N "{value=\"avg\"} ");
+		sprintf(buf, "%d\n", p->avg);
+		psb_add_str(sb, buf);
 
-	psb_add_str(sb, IPMIMEXM_DCMI_POWER_N "{value=\"min\"} ");
-	sprintf(buf, "%d\n", p->min);
-	psb_add_str(sb, buf);
-	psb_add_str(sb, IPMIMEXM_DCMI_POWER_N "{value=\"max\"} ");
-	sprintf(buf, "%d\n", p->max);
-	psb_add_str(sb, buf);
-	psb_add_str(sb, IPMIMEXM_DCMI_POWER_N "{value=\"avg\"} ");
-	sprintf(buf, "%d\n", p->avg);
-	psb_add_str(sb, buf);
-
-	if (!compact)
-		addPromInfo(IPMIMEXM_DCMI_PSAMPLE);
-	psb_add_str(sb, IPMIMEXM_DCMI_PSAMPLE_N);
-	sprintf(buf, " %u\n", p->sample_time/1000);
-	psb_add_str(sb, buf);
+		if (!compact)
+			addPromInfo(IPMIMEXM_DCMI_PSAMPLE);
+		psb_add_str(sb, IPMIMEXM_DCMI_PSAMPLE_N);
+		sprintf(buf, " %u\n", p->sample_time/1000);
+		psb_add_str(sb, buf);
+	}
 
 	if (free_sb) {
 		if (psb_len(sb) != sz)

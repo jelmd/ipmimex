@@ -167,10 +167,11 @@ collect(prom_collector_t *self) {
 		getVersions(sb, compact);
 	if (!global.scfg.no_ipmi) {
 		if (sdrs_changed(global.sensor_list)) {
+			uint32_t n;
 			PROM_INFO("SDR repo changed. Reloading ...", "");
 			stop(global.sensor_list);
 			global.sensor_list =
-				start(&(global.scfg), global.promflags & PROM_COMPACT);
+				start(&(global.scfg), global.promflags & PROM_COMPACT, &n);
 		}
 		collect_ipmi(sb, global.sensor_list);
 	}
@@ -689,9 +690,9 @@ main(int argc, char **argv) {
 	if (mode == 2)
 		pfd = daemonize();
 
-	if ((global.sensor_list =
-		start(&(global.scfg), global.promflags & PROM_COMPACT)) == NULL)
-	{
+	global.sensor_list =
+		start(&(global.scfg), global.promflags & PROM_COMPACT, &n);
+	if (n == 0) {
 		status = SMF_EXIT_TEMP_DISABLE;
 		if (mode == 2) {
 			(void) write(pfd, &status, sizeof (status));

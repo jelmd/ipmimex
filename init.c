@@ -290,10 +290,10 @@ gen_help(sensor_t *list) {
 }
 
 sensor_t *
-start(scan_cfg_t *cfg, bool compact) {
-	uint32_t sensors = 0;
+start(scan_cfg_t *cfg, bool compact, uint32_t *sensors) {
 	uint8_t cc;
 
+	*sensors = 0;
 	if (started)
 		return NULL;
 
@@ -313,8 +313,8 @@ start(scan_cfg_t *cfg, bool compact) {
 		return NULL;
 	}
 
-	sensor_t *slist = get_sensor_list(cfg, &sensors);
-	if (sensors == 0)
+	sensor_t *slist = get_sensor_list(cfg, sensors);
+	if (*sensors == 0)
 		cfg->no_ipmi = true;
 	else if (!compact)
 		gen_help(slist);
@@ -331,9 +331,9 @@ start(scan_cfg_t *cfg, bool compact) {
 
 	//show_ipmitool_sensors(slist, NULL, true);
 	if (!cfg->no_dcmi)
-		sensors++;
+		(*sensors)++;
 
-	PROM_INFO("IPMI stack initialized. All sensors to monitor: %d", sensors);
+	PROM_INFO("IPMI stack initialized. All sensors to monitor: %d", *sensors);
 	started = 1;
 	return slist;
 }
