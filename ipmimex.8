@@ -25,7 +25,7 @@ ipmimex \- a metrics exporter for BMC
 .B ipmimex
 is a \fBm\fRetrics \fBex\fRporter for Board Management Controller (BMC)
 and similar devices, which are directly accessible from the host running
-this utility using the system'ss \fBI\fRntelligent \fBP\fRlatform
+this utility using the system's \fBI\fRntelligent \fBP\fRlatform
 \fBM\fRanagement \fBI\fRnterface (\fBIPMI\fR).
 Collected data can be exposed via HTTP in Prometheus exposition format [1]
 e.g. using the default endpoint URL
@@ -133,7 +133,11 @@ are know to have this bug.
 Disable the overall scrapetime metrics (libprom collector), i.e. the time
 elapsed when scraping all the required data. One needs to also disable
 collecting scrapetimes of all other collectors before this option
-gets honored.
+gets honored. This is very helpful when one tries to determine the stats query
+interval to use. E.g. Gigabyte BMCs are slow as hell - the overall scrapetime
+intervall will show you something close to 2 seconds =8-(. So especially there
+it is pretty important to unselect all sensors not needed using the exclude
+options -X and -x.
 
 .TP
 .B \-N

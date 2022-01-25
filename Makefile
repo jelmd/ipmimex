@@ -42,7 +42,7 @@ CC = $(USE_CC)
 # For all others one needs to add corresponding rules.
 OPTIMZE_cc ?= -xO3
 OPTIMZE_gcc ?= -O3
-#OPTIMZE ?= $(OPTIMZE_$(CC)) -DNDEBUG
+OPTIMZE ?= $(OPTIMZE_$(CC)) -DNDEBUG
 
 CFLAGS_cc = -xcode=pic32
 CFLAGS_cc += -errtags -erroff=%none,E_UNRECOGNIZED_PRAGMA_IGNORED,E_ATTRIBUTE_UNKNOWN,E_NONPORTABLE_BIT_FIELD_TYPE -errwarn=%all -D_XOPEN_SOURCE=600 -D__EXTENSIONS__=1

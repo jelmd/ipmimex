@@ -295,9 +295,9 @@ static const char *metric_unit[] = {
 const char *
 unit2prom(unit_t *u) {
 	// base + modifier + mprefix + '\0'
-	static char buf[2 * PROM_UNIT_MAX_STRLEN + 2 + 1];
+	static char buf[2 * PROM_UNIT_MAX_STRLEN + 5 + 1];
 	char *idx = buf;
-	int len;
+	size_t len;
 
 	const char *sbase = u->base == 0
 		? ""
@@ -310,7 +310,7 @@ unit2prom(unit_t *u) {
 		return "percent";       // this is closer to prom names than '%'
 
 	len = strlen(sbase);
-	strncpy(idx, sbase, len);
+	strcpy(idx, sbase);
 	idx += len;
 
 	if (u->modifier_prefix == SDR_UNIT_MODIFIER_PREFIX_MUL) {
@@ -322,7 +322,7 @@ unit2prom(unit_t *u) {
 	}
 
 	len = strlen(smod);
-	strncpy(idx, smod, len);
+	strcpy(idx, smod);
 	idx += len;
 	*idx = '\0';
 

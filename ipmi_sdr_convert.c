@@ -491,7 +491,7 @@ sdr_unit2str(unit_t *u) {
 		return "percent";		// this is closer to prom names than '%'
 
 	len = strlen(sbase);
-	strncpy(idx, sbase, len);
+	strcpy(idx, sbase);
 	idx += len;
 
 	if (u->modifier_prefix == SDR_UNIT_MODIFIER_PREFIX_MUL) {
@@ -503,7 +503,7 @@ sdr_unit2str(unit_t *u) {
 	}
 
 	len = strlen(smod);
-	strncpy(idx, smod, len);
+	strcpy(idx, smod);
 	idx += len;
 	*idx = '\0';
 
