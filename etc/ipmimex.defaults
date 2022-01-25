@@ -1,0 +1,18 @@
+# file: /etc/default/ipmimex
+
+# Any options to pass verbatim to the exporter. See 'ipmimex -h'.
+ARGS="-c "
+
+# For buggy DELLs:
+#ARGS="-c D"
+
+# For SUN ILOMs:
+#ARGS="-c N"
+
+# Compact as possible. Readings, only:
+#ARGS="-c PoDNUT"
+
+# Just Power now and overall scrapetime:
+#ARGS='-c -n version,ipmi,process -PS'
+
+# Check operational state e.g. via http://localhost:9290/metrics

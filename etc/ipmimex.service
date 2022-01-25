@@ -1,0 +1,35 @@
+# file: /lib/systemd/system/ipmimex.service
+
+[Unit]
+Description=Metrics exporter for IPMI driven BMCs
+Documentation=man:ipmimex(8)
+After=network.target auditd.service
+Before=vmagent.service
+
+[Service]
+Type=forking
+User=daemon
+Group=daemon
+# The 'control-group' mode is absolutely unreliable at least on ubuntu 20.04.
+# So e.g. on start timeout spawned threads would not be killed and restart
+# would fail because the address/port is already in use.
+KillMode=mixed
+
+EnvironmentFile=-/etc/default/ipmimex
+LogsDirectory=ipmimex
+
+Restart=always
+RestartSec=1
+RestartPreventExitStatus=1 95 96 97 98 99 100 101 102
+# This allows us to run ipmimex as unprivileged service. One could accomplish
+# the same thing using a propper udev rule.
+ExecStartPre=+-/bin/chown daemon /dev/ipmi0
+ExecStart=/usr/sbin/ipmimex -l %L/ipmimex/out.log -d $ARGS
+ExecStop=/bin/kill -s SIGTERM $MAINPID
+TimeoutSec=10
+
+MemoryLow=2M
+MemoryMin=1M
+
+[Install]
+WantedBy=multi-user.target
